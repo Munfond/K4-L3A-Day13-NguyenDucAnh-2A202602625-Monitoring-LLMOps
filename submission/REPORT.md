@@ -45,12 +45,21 @@
 | Latency P95 / TTFT P95 | ~1176 ms / ~51 ms | ~907 ms / ~50 ms | Hoạt động bình thường P95 ~907ms; khi kích hoạt incident rag_slow P95 tăng lên 3656ms (TTFT vẫn 50ms). |
 | Retrieval success rate | 100% (10/10) | 100% | Toàn bộ các lượt tra cứu tài liệu đều trả về thành công. |
 
+### Minh họa kiểm thử và xác thực hệ thống
+![Pytest](evidence/01-pytest.png)
+![Log Validator](evidence/02-log-validator.png)
+![Dashboard Validator](evidence/03-dashboard-validator.png)
+
 ## 4. Logging và PII
 
 - **Cách tạo/nhận và truyền correlation ID:** Trong `CorrelationIdMiddleware` (`app/middleware.py`), mỗi request bắt đầu bằng việc xóa context cũ qua `clear_contextvars()`. Sau đó nhận `x-request-id` từ request headers hoặc sinh ID mới theo định dạng `req-<8-hex>` (`f"req-{uuid.uuid4().hex[:8]}"`). ID được gán vào `request.state.correlation_id` và bind vào structlog context qua `bind_contextvars(correlation_id=correlation_id)`. Cuối middleware, trả lại headers `x-request-id` và `x-response-time-ms` trong HTTP response.
 - **Các metadata được ghi vào structured log:** Gồm các trường schema bắt buộc và enrichment context: `ts` (ISO UTC timestamp), `level`, `service` ("api"), `event`, `correlation_id`, `user_id_hash` (hash SHA256 12 ký tự), `session_id`, `feature`, `model`, `env` ("dev"), cùng các runtime metrics (`latency_ms`, `ttft_ms`, `tokens_in`, `tokens_out`, `cost_usd`, `quality_score`, `tool_name`, `tool_success`, và `message_preview`/`answer_preview`).
 - **Cách bảo đảm PII được scrub trước khi ghi:** Đăng ký processor `scrub_event` trong structlog pipeline (`app/logging_config.py`) nằm ngay trước `JsonlFileProcessor` và `JSONRenderer`. Hàm `scrub_event` duyệt và thay thế các chuỗi nhạy cảm khớp với regex trong `PII_PATTERNS` (`app/pii.py`) cho email, số điện thoại Việt Nam, CCCD 12 số, thẻ thanh toán thành các token `[REDACTED_*]` trước khi ghi xuống file `data/logs.jsonl` hoặc console.
 - **Cách kiểm chứng kết quả:** Chạy script `python scripts/validate_logs.py` đạt 100/100 điểm (0 thiếu schema, 0 thiếu context, 10 correlation IDs duy nhất, 0 PII leak). Kiểm tra response headers trả về đủ `x-request-id` và `x-response-time-ms`. Chạy `pytest` đạt 24/24 tests pass bao gồm các test case cho email, SĐT VN, CCCD và thẻ tín dụng.
+
+### Minh họa Structured Log và PII Redaction
+![Structured Log](evidence/04-structured-log.png)
+![PII Redaction](evidence/05-pii-redaction.png)
 
 ## 5. Tracing và prompt versioning
 
@@ -70,6 +79,13 @@
   - Promoted v2 trên production: `8b2b34c7661429a534edf5608c8ec95a`
   - Rollback v1 trên production: `294226830699b9f602cd4fe95258928d`
 - **Cách promote và rollback `production`:** Sử dụng API / SDK Langfuse `client.update_prompt(name="day13-chat", version=2, new_labels=["candidate", "production"])` để gắn nhãn `production` cho version 2; và khi cần rollback thì thực thi `client.update_prompt(name="day13-chat", version=1, new_labels=["baseline", "production"])` đưa nhãn `production` quay về version 1 một cách an toàn mà không cần thay đổi source code hay rebuild ứng dụng.
+
+### Minh họa Tracing và Quản lý Prompt trên Langfuse
+![Trace List](evidence/06-trace-list.png)
+![Trace Waterfall](evidence/07-trace-waterfall.png)
+![Trace Metadata](evidence/08-trace-metadata.png)
+![Prompt Versions](evidence/09-prompt-versions.png)
+![Prompt Rollback](evidence/10-prompt-rollback.png)
 
 ## 6. Dashboard, SLO và alerts
 
@@ -93,6 +109,9 @@
   2. `HighErrorRateAndRetrievalFailure` (Critical | 3m | `#llmops-incident` | `@oncall-backend`): Kích hoạt khi `error_rate_pct > 2.0%` hoặc `retrieval_success_rate_pct < 90.0%` duy trì trong 3 phút. Runbook: [docs/alerts.md#alert-2](file:///c:/Users/nguye/K4-L3A-Day13-NguyenDucAnh-2A202602625-Monitoring-LLMOps/docs/alerts.md#alert-2).
   3. `TokenCostSpikeAnomaly` (Warning | 10m | `#llmops-finops` | `@llmops-finops`): Kích hoạt khi tổng chi phí vượt $2.50 USD hoặc trung bình output token vượt 400 token/request kéo dài 10 phút. Runbook: [docs/alerts.md#alert-3](file:///c:/Users/nguye/K4-L3A-Day13-NguyenDucAnh-2A202602625-Monitoring-LLMOps/docs/alerts.md#alert-3).
 
+### Minh họa Dashboard Runtime
+![Dashboard Runtime](evidence/11-dashboard-overview.png)
+
 ## 7. Điều tra challenge
 
 - **Challenge ID:** `day13-k4-l3a-monitoring-llmops-v1`
@@ -115,6 +134,16 @@
   2. Thiết lập timeout chặt chẽ (ví dụ 1.5s) cho vector search client kèm cơ chế circuit breaker và fallback sang direct LLM generation nếu vector store không phản hồi.
   3. Cấu hình hệ thống alert `HighTailLatencyBreach` trên Slack kênh `#llmops-alerts` để đội ngũ trực ca (On-call SRE) nhận được cảnh báo sớm ngay khi P95 vượt ngưỡng trong 5 phút trước khi cạn ngân sách lỗi (Error Budget).
 
+### Chuỗi minh chứng điều tra Incident (Metrics → Logs → Traces)
+1. **Metrics:**
+![Incident Metric](evidence/12-incident-metric.png)
+
+2. **Logs:**
+![Incident Log](evidence/13-incident-log.png)
+
+3. **Traces:**
+![Incident Trace](evidence/14-incident-trace.png)
+
 ## 8. Giải thích và tự đánh giá
 
 - **Một quyết định kỹ thuật quan trọng và lý do:** Quyết định thiết lập `capture_input=False, capture_output=False` trên tất cả child observations của Langfuse kết hợp với processor `scrub_event` đệ quy đặt trước JSON serializer của `structlog`. Lý do: Đảm bảo nguyên tắc bảo mật tối thượng Zero PII Leakage ngay tại ranh giới ứng dụng, dữ liệu cá nhân (email, SĐT, CCCD, thẻ thanh toán) tuyệt đối không bị lọt vào log file cục bộ hay nền tảng cloud tracing của bên thứ ba.
@@ -133,10 +162,11 @@
 
 ## 9. Checklist trước khi nộp
 
-- [ ] Kết quả và evidence thuộc commit SHA cuối.
-- [ ] Tất cả ảnh/output mở được bằng đường dẫn tương đối.
-- [ ] Incident evidence nối đúng metric → log → trace.
-- [ ] Trace/prompt evidence thuộc project Langfuse cá nhân và ảnh không lộ key/secret.
-- [ ] Repository chạy lại được theo README.
-- [ ] Không có secret, API key, PII thô hoặc evidence của người khác/lớp khác.
-- [ ] URL repo và commit SHA cuối đã được nộp trên LMS/Codelabs.
+- [x] Kết quả và evidence thuộc commit SHA cuối.
+- [x] Tất cả ảnh/output mở được bằng đường dẫn tương đối.
+- [x] Incident evidence nối đúng metric → log → trace.
+- [x] Trace/prompt evidence thuộc project Langfuse cá nhân và ảnh không lộ key/secret.
+- [x] Repository chạy lại được theo README.
+- [x] Không có secret, API key, PII thô hoặc evidence của người khác/lớp khác.
+- [x] URL repo và commit SHA cuối đã được nộp trên LMS/Codelabs.
+
