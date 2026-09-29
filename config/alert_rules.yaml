@@ -1,25 +1,26 @@
 alerts:
-  - name: TODO_alert_1
-    severity: TODO
-    condition: TODO
-    duration: TODO
+  - name: HighTailLatencyBreach
+    severity: warning
+    condition: 'p95(latency_ms) > 3000'
+    duration: 5m
     type: symptom-based
-    channel: slack
-    owner: TODO
+    channel: '#llmops-alerts'
+    owner: '@oncall-sre'
     runbook: docs/alerts.md#alert-1
-  - name: TODO_alert_2
-    severity: TODO
-    condition: TODO
-    duration: TODO
+  - name: HighErrorRateAndRetrievalFailure
+    severity: critical
+    condition: 'error_rate_pct > 2.0 or retrieval_success_rate_pct < 90.0'
+    duration: 3m
     type: symptom-based
-    channel: slack
-    owner: TODO
+    channel: '#llmops-incident'
+    owner: '@oncall-backend'
     runbook: docs/alerts.md#alert-2
-  - name: TODO_alert_3
-    severity: TODO
-    condition: TODO
-    duration: TODO
+  - name: TokenCostSpikeAnomaly
+    severity: warning
+    condition: 'sum(cost_usd) > 2.50 or avg(tokens_out) > 400'
+    duration: 10m
     type: symptom-based
-    channel: slack
-    owner: TODO
+    channel: '#llmops-finops'
+    owner: '@llmops-finops'
     runbook: docs/alerts.md#alert-3
+

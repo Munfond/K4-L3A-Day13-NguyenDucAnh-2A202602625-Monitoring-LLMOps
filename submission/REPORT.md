@@ -54,21 +54,44 @@
 
 ## 5. Tracing và prompt versioning
 
-- **Cách xác nhận traces do chính tôi tạo trong project cá nhân:**
+- **Cách xác nhận traces do chính tôi tạo trong project cá nhân:** Traces được kết nối và gửi trực tiếp về project Langfuse cá nhân `day13-k4-l3a-2A202602625` (Project ID: `cmumcljev12xkad0c44gkvpfr`) thông qua cặp API keys cá nhân `LANGFUSE_PUBLIC_KEY` và `LANGFUSE_SECRET_KEY`. Mỗi trace chứa user_id băm (`user_id_hash`), `session_id`, `environment: dev`, tags `["lab", feature, model]` và metadata mang mã `correlation_id` tương ứng với request chạy trên máy cục bộ.
 - **Cấu trúc root/retrieval/generation observations:**
-- **Cách nối trace với log:**
-- **Prompt name:**
-- **Version/label baseline:**
-- **Version/label candidate:**
+  - **Root observation (`lab-agent-run`, type: `agent`):** Đại diện cho toàn bộ luồng xử lý `LabAgent.run`, chứa thông tin user hash, correlation_id, model, feature, tags và kết quả tổng thể.
+  - **Child observation 1 (`retrieval`, type: `retriever`):** Gắn với bước tra cứu ngữ cảnh `retrieve(message)`, đo thời gian tra cứu vector store và ghi metadata số tài liệu tìm thấy (`doc_count`).
+  - **Child observation 2 (`generation`, type: `generation`):** Gắn với bước sinh token của `FakeLLM.generate(prompt)`, ghi nhận model (`claude-sonnet-4-5`), prompt template từ Langfuse, chi tiết số token (`usage_details`: `input`, `output`, `total`) và chi phí ước tính (`cost_details`: `total_cost`).
+  Cấu trúc phân cấp cha–con này cho phép biểu đồ waterfall phân tách rõ ràng thời gian của bước retrieval và generation, dễ dàng khoanh vùng bước nào bị chậm khi có sự cố.
+- **Cách nối trace với log:** Thông qua `correlation_id` (ví dụ `req-79cccbe5`). Trong log file `data/logs.jsonl`, mỗi request/response đều có `correlation_id`. Trên Langfuse, metadata của trace root và các span đều được inject `correlation_id: correlation_id`. Từ log entry bất thường có thể tra cứu ngay trace trên Langfuse, và ngược lại.
+- **Prompt name:** `day13-chat`
+- **Version/label baseline:** Version 1, mang labels `baseline` và `production` (template: `Feature={{feature}}\nDocs={{docs}}\nQuestion={{message}}`).
+- **Version/label candidate:** Version 2, mang label `candidate` (bổ sung chỉ dẫn: `\nAnswer concisely in 1-2 sentences.`).
 - **Trace ID của mỗi version:**
-- **Cách promote và rollback `production`:**
+  - Baseline (v1, label `baseline`): `e4d5d49b2b1074565b9b559bd5c984c0` (hoặc các trace load test v1: `519f596ca5a1ed6dfaef8ad6fa627812`, `9b0a8cfd5ef88fcb79d700ef36ef9fb5`)
+  - Candidate (v2, label `candidate`): `a4b72a5b8164e0b1474d6a6ca6fc67b6`
+  - Promoted v2 trên production: `8b2b34c7661429a534edf5608c8ec95a`
+  - Rollback v1 trên production: `294226830699b9f602cd4fe95258928d`
+- **Cách promote và rollback `production`:** Sử dụng API / SDK Langfuse `client.update_prompt(name="day13-chat", version=2, new_labels=["candidate", "production"])` để gắn nhãn `production` cho version 2; và khi cần rollback thì thực thi `client.update_prompt(name="day13-chat", version=1, new_labels=["baseline", "production"])` đưa nhãn `production` quay về version 1 một cách an toàn mà không cần thay đổi source code hay rebuild ứng dụng.
 
 ## 6. Dashboard, SLO và alerts
 
-- **Dashboard và sáu panel:**
-- **SLO và lý do chọn:**
+- **Dashboard và sáu panel:** Dựng đúng theo đặc tả contract `config/dashboard.yaml` với nguồn dữ liệu từ `data/logs.jsonl`, time range 60 phút, tự động làm mới mỗi 30 giây:
+  1. `Latency percentiles and TTFT` (P50, P95, P99 và TTFT P95, đơn vị ms; Threshold: P95 &le; 3000 ms).
+  2. `Request traffic` (Tổng số request và tốc độ request/phút; Threshold: &ge; 1 req/min).
+  3. `Error rate and retrieval success` (Tỷ lệ lỗi %, phân loại theo error_type và tỷ lệ retrieval thành công %; Threshold: Error &le; 2%, Success &ge; 90%).
+  4. `Cost over time` (Tổng chi phí tích lũy và theo phút, đơn vị USD; Threshold: &le; $2.50 USD).
+  5. `Input and output tokens` (Tổng tokens in và tokens out, đơn vị tokens; Threshold: &le; 50,000 tokens).
+  6. `Quality proxy` (Điểm chất lượng trung bình từ 0.00 đến 1.00; Threshold: Mean &ge; 0.75).
+- **SLO và lý do chọn:** Chọn Primary SLO `fast_successful_requests` với mục tiêu **99.5%** trong chu kỳ đánh giá **28 ngày**.
+  - SLI: `Tỷ lệ request có event == "response_sent" và latency_ms <= 3000ms / Tổng request_received`.
+  - Lý do chọn: Trong điều kiện bình thường (baseline), độ trễ P95 đạt ~400–500ms. Ngưỡng 3000ms được chọn làm ranh giới chấp nhận của người dùng đối với một ứng dụng chatbot tương tác (nếu quá 3s người dùng thường sẽ refresh hoặc bỏ phiên). Mức 99.5% phản ánh chất lượng dịch vụ cao, chỉ cho phép 0.5% lỗi hoặc phản hồi chậm.
 - **Cách tính error budget:**
+  - Tỷ lệ Error Budget = $100\% - 99.5\% = 0.5\%$.
+  - Nếu hệ thống nhận 100,000 requests trong cửa sổ 28 ngày:
+    $\text{Error Budget} = 100,000 \times 0.5\% = 500 \text{ requests được phép lỗi hoặc trễ > 3000ms}$.
+  - Tốc độ tiêu hao (Burn Rate) = $\frac{\text{Tỷ lệ lỗi thực tế}}{0.5\%}$. Khi Burn Rate > 1, ngân sách lỗi sẽ cạn trước chu kỳ 28 ngày, kích hoạt việc đóng băng release tính năng mới để tập trung cải thiện hiệu năng.
 - **Ba alert và runbook tương ứng:**
+  1. `HighTailLatencyBreach` (Warning | 5m | `#llmops-alerts` | `@oncall-sre`): Kích hoạt khi `p95(latency_ms) > 3000` liên tục trong 5 phút. Runbook: [docs/alerts.md#alert-1](file:///c:/Users/nguye/K4-L3A-Day13-NguyenDucAnh-2A202602625-Monitoring-LLMOps/docs/alerts.md#alert-1).
+  2. `HighErrorRateAndRetrievalFailure` (Critical | 3m | `#llmops-incident` | `@oncall-backend`): Kích hoạt khi `error_rate_pct > 2.0%` hoặc `retrieval_success_rate_pct < 90.0%` duy trì trong 3 phút. Runbook: [docs/alerts.md#alert-2](file:///c:/Users/nguye/K4-L3A-Day13-NguyenDucAnh-2A202602625-Monitoring-LLMOps/docs/alerts.md#alert-2).
+  3. `TokenCostSpikeAnomaly` (Warning | 10m | `#llmops-finops` | `@llmops-finops`): Kích hoạt khi tổng chi phí vượt $2.50 USD hoặc trung bình output token vượt 400 token/request kéo dài 10 phút. Runbook: [docs/alerts.md#alert-3](file:///c:/Users/nguye/K4-L3A-Day13-NguyenDucAnh-2A202602625-Monitoring-LLMOps/docs/alerts.md#alert-3).
 
 ## 7. Điều tra challenge
 
